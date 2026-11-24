@@ -26,7 +26,7 @@ def get_status(p_cur: float) -> str:
 
 def init_data() -> pd.DataFrame:
     if os.path.exists(DATA_FILE):
-        df = pd.read_csv(DATA_FILE)
+        df = pd.read_csv(DATA_FILE, dtype={"№ Баллона": str})
         df["Дата"] = pd.to_datetime(df["Дата"]).dt.strftime("%Y-%m-%d")
         return df
 
@@ -52,8 +52,6 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
     out["Остаток_л"] = out.apply(lambda r: calc_volume_liters(r["V_л"], r["P_тек"]), axis=1)
     out["Остаток_м3"] = out["Остаток_л"] / 1000.0
 
-    # Расход: в первой строке — от начального давления заправки;
-    # в последующих — разница с предыдущим остатком, а при росте давления (заправка/замена) — от P_нач
     consumptions = []
     for i, row in out.iterrows():
         v0 = calc_volume_liters(row["V_л"], row["P_нач"])
@@ -87,9 +85,9 @@ def make_gauge(p_cur: float, title_text: str) -> go.Figure:
                 "bar": {"color": "#1F497D", "thickness": 0.25},
                 "bgcolor": "white",
                 "steps": [
-                    {"range": [0, 3], "color": "#F8D7DA"},      # Критично / замена
-                    {"range": [3, 10], "color": "#FFF3CD"},     # Ниже нормы / контроль
-                    {"range": [10, 25], "color": "#D4EDDA"},    # Норма
+                    {"range": [0, 3], "color": "#F8D7DA"},
+                    {"range": [3, 10], "color": "#FFF3CD"},
+                    {"range": [10, 25], "color": "#D4EDDA"},
                 ],
                 "threshold": {
                     "line": {"color": "red", "width": 4},
@@ -108,7 +106,6 @@ st.title("Журнал учёта гелиевых баллонов и визу�
 df_raw = init_data()
 df_calc = compute_metrics(df_raw)
 
-# Выбор строки для отображения на манометре
 selected_idx = st.selectbox(
     "Выберите запись для отображения на манометре:",
     options=range(len(df_calc)),
@@ -146,7 +143,6 @@ with col_kpi:
 
 st.divider()
 
-# Форма добавления нового ежемесячного замера
 st.subheader("Добавить новый замер")
 with st.form("add_reading_form", clear_on_submit=True):
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -188,7 +184,6 @@ display_df["% Заполнения"] = display_df["% Заполнения"].map(
 
 st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-# Выгрузка в Excel при необходимости
 excel_path = "helium_report.xlsx"
 with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
     df_calc.to_excel(writer, index=False, sheet_name="Учёт гелия")
