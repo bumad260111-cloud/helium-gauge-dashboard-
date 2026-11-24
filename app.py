@@ -69,6 +69,7 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
     out["Остаток_л"] = out.apply(lambda r: calc_volume_liters(r["V_л"], r["P_тек"]), axis=1)
     out["Остаток_м3"] = out["Остаток_л"] / 1000.0
 
+    # Расход считаем в разрезе пары (Прибор, № Баллона)
     consumptions = []
     last_by_key = {}
 
@@ -109,37 +110,39 @@ def p_to_angle_deg(p_val: float) -> float:
     return 225.0 - (clamped / P_MAX) * 270.0
 
 
-def make_tm2_gauge(p_cur: float, title_text: str, height: int = 250) -> go.Figure:
+def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figure:
     fig = go.Figure()
 
     r_outer = 1.0
-    r_tick_major = 0.85
-    r_tick_minor = 0.91
-    r_label = 0.68
-    r_needle = 0.78
-    r_tail = 0.16
+    r_tick_major = 0.82
+    r_tick_minor = 0.89
+    r_label = 0.66
+    r_needle = 0.79
+    r_tail = 0.17
 
-    # Внешний обод циферблата
+    # Внешний жирный обод циферблата
     ring_angles = [math.radians(a) for a in range(0, 361, 3)]
     fig.add_trace(
         go.Scatter(
             x=[r_outer * math.cos(a) for a in ring_angles],
             y=[r_outer * math.sin(a) for a in ring_angles],
             mode="lines",
-            line=dict(color="#5B9BD5", width=3),
+            fill="toself",
+            fillcolor="#FFFFFF",
+            line=dict(color="#4A90E2", width=6),
             hoverinfo="skip",
             showlegend=False,
         )
     )
 
-    # Дуга шкалы 0..25 МПа
+    # Внутреннее кольцо шкалы
     arc_deg = [225.0 - (i / 100.0) * 270.0 for i in range(101)]
     fig.add_trace(
         go.Scatter(
-            x=[0.96 * math.cos(math.radians(a)) for a in arc_deg],
-            y=[0.96 * math.sin(math.radians(a)) for a in arc_deg],
+            x=[0.95 * math.cos(math.radians(a)) for a in arc_deg],
+            y=[0.95 * math.sin(math.radians(a)) for a in arc_deg],
             mode="lines",
-            line=dict(color="#1F4E78", width=2),
+            line=dict(color="#1B3F66", width=2.5),
             hoverinfo="skip",
             showlegend=False,
         )
@@ -150,13 +153,13 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 250) -> go.Figur
         ang = math.radians(p_to_angle_deg(p_tick))
         is_major = (p_tick % 5 == 0)
         r_start = r_tick_major if is_major else r_tick_minor
-        tick_color = "#C00000" if p_tick == 16 else ("#1F4E78" if is_major else "#4A7EBB")
-        tick_width = 3.0 if is_major else 1.3
+        tick_color = "#C00000" if p_tick == 16 else ("#16365C" if is_major else "#3B6FA8")
+        tick_width = 4.5 if is_major else 2.2
 
         fig.add_trace(
             go.Scatter(
-                x=[r_start * math.cos(ang), 0.96 * math.cos(ang)],
-                y=[r_start * math.sin(ang), 0.96 * math.sin(ang)],
+                x=[r_start * math.cos(ang), 0.95 * math.cos(ang)],
+                y=[r_start * math.sin(ang), 0.95 * math.sin(ang)],
                 mode="lines",
                 line=dict(color=tick_color, width=tick_width),
                 hoverinfo="skip",
@@ -170,28 +173,28 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 250) -> go.Figur
                     x=[r_label * math.cos(ang)],
                     y=[r_label * math.sin(ang)],
                     mode="text",
-                    text=[str(p_tick)],
-                    textfont=dict(size=12, color="#1F4E78", family="Arial"),
+                    text=[f"<b>{p_tick}</b>"],
+                    textfont=dict(size=16, color="#16365C", family="Arial"),
                     hoverinfo="skip",
                     showlegend=False,
                 )
             )
 
-    # Подписи на циферблате в стиле ТМ2
+    # Подписи на циферблате
     fig.add_annotation(
-        x=0.0, y=-0.38, text="<b>MPa</b>", showarrow=False,
-        font=dict(size=13, color="#1F4E78")
+        x=0.0, y=-0.36, text="<b>MPa</b>", showarrow=False,
+        font=dict(size=16, color="#16365C")
     )
     fig.add_annotation(
-        x=-0.52, y=-0.62, text="ТМ2", showarrow=False,
-        font=dict(size=9, color="#444444")
+        x=-0.48, y=-0.62, text="<b>ТМ2</b>", showarrow=False,
+        font=dict(size=11, color="#333333")
     )
     fig.add_annotation(
-        x=0.52, y=-0.62, text="кл. 2,5", showarrow=False,
-        font=dict(size=9, color="#444444")
+        x=0.48, y=-0.62, text="<b>кл. 2,5</b>", showarrow=False,
+        font=dict(size=11, color="#333333")
     )
 
-    # Стрелка от центра
+    # Жирная стрелка от центра
     needle_ang = math.radians(p_to_angle_deg(p_cur))
     x_tip = r_needle * math.cos(needle_ang)
     y_tip = r_needle * math.sin(needle_ang)
@@ -203,37 +206,54 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 250) -> go.Figur
             x=[x_back, x_tip],
             y=[y_back, y_tip],
             mode="lines",
-            line=dict(color="#111111", width=4),
+            line=dict(color="#111111", width=6.5),
             hovertemplate=f"Давление: {p_cur:.1f} МПа<extra></extra>",
             showlegend=False,
         )
     )
 
-    # Ось стрелки по центру
+    # Наконечник стрелки
+    fig.add_trace(
+        go.Scatter(
+            x=[x_tip],
+            y=[y_tip],
+            mode="markers",
+            marker=dict(
+                symbol="triangle-up",
+                size=14,
+                color="#111111",
+                angle=-(p_to_angle_deg(p_cur) - 90.0),
+            ),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    # Крупный центральный узел стрелки
     fig.add_trace(
         go.Scatter(
             x=[0.0],
             y=[0.0],
             mode="markers",
-            marker=dict(size=11, color="#222222", line=dict(color="#D0D0D0", width=2)),
+            marker=dict(size=16, color="#1A1A1A", line=dict(color="#D9D9D9", width=2.5)),
             hoverinfo="skip",
             showlegend=False,
         )
     )
 
     fig.update_layout(
-        title=dict(text=title_text, x=0.5, font=dict(size=14)),
+        title=dict(text=f"<b>{title_text}</b>", x=0.5, font=dict(size=15)),
         height=height,
-        margin=dict(l=10, r=10, t=38, b=10),
-        plot_bgcolor="white",
+        margin=dict(l=2, r=2, t=34, b=2),
+        plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
         xaxis=dict(
-            range=[-1.15, 1.15],
+            range=[-1.03, 1.03],
             visible=False,
             fixedrange=True,
         ),
         yaxis=dict(
-            range=[-1.12, 1.12],
+            range=[-1.03, 1.03],
             visible=False,
             fixedrange=True,
             scaleanchor="x",
@@ -278,7 +298,7 @@ for row_idx in range(2):
                 p_val = float(r["P_тек"])
                 cyl_label = r["№ Баллона"] if str(r["№ Баллона"]).strip() else "—"
                 st.plotly_chart(
-                    make_tm2_gauge(p_val, f"{dev_name} (Баллон №{cyl_label})"),
+                    make_tm2_gauge(p_val, f"{dev_name} (Баллон №{cyl_label})", height=310),
                     use_container_width=True,
                 )
                 rem_str = f"{r['Остаток_л']:,.0f}".replace(",", " ")
@@ -288,7 +308,7 @@ for row_idx in range(2):
                 )
             else:
                 st.plotly_chart(
-                    make_tm2_gauge(0.0, f"{dev_name} (нет данных)"),
+                    make_tm2_gauge(0.0, f"{dev_name} (нет данных)", height=310),
                     use_container_width=True,
                 )
                 st.caption("P = 0.0 МПа | Замеров пока нет — добавьте запись ниже.")
