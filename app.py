@@ -231,4 +231,64 @@ with st.form("add_reading_form", clear_on_submit=True):
     f_dev = c2.selectbox("Прибор", options=dev_options, index=dev_options.index(last_dev))
     f_op = c3.text_input("Пост / Оператор", value=last_op)
     f_cyl = c4.text_input("№ Баллона", value=last_cyl)
-    f_v
+    f_v = c5.number_input("V баллона, л", min_value=1.0, max_value=200.0, value=last_v, step=5.0)
+    f_p0 = c6.number_input("P нач., МПа", min_value=0.1, max_value=30.0, value=last_p0, step=0.5)
+    f_p1 = c7.number_input("P тек., МПа", min_value=0.0, max_value=30.0, value=10.0, step=0.5)
+
+    submitted = st.form_submit_button("Добавить запись в журнал")
+    if submitted:
+        new_entry = pd.DataFrame([{
+            "№": next_num,
+            "Дата": f_date.strftime("%Y-%m-%d"),
+            "Прибор": f_dev,
+            "Пост / Оператор": f_op,
+            "№ Баллона": f_cyl,
+            "V_л": f_v,
+            "P_нач": f_p0,
+            "P_тек": f_p1,
+        }])
+        updated = pd.concat([df_raw, new_entry], ignore_index=True)
+        updated.to_csv(DATA_FILE, index=False)
+        st.rerun()
+
+st.divider()
+
+# Журнал замеров и управление им
+st.subheader("Журнал замеров")
+
+filter_options = ["Все приборы"] + grid_devices
+selected_filter = st.selectbox("Показать в журнале:", options=filter_options)
+
+with st.expander("Управление журналом"):
+    confirm_clear = st.checkbox("Подтверждаю очистку всех записей из журнала")
+    if st.button("Очистить журнал", disabled=not confirm_clear):
+        empty_df = pd.DataFrame(columns=COLUMNS)
+        empty_df.to_csv(DATA_FILE, index=False)
+        st.rerun()
+
+if not df_calc.empty:
+    table_src = (
+        df_calc
+        if selected_filter == "Все приборы"
+        else df_calc[df_calc["Прибор"] == selected_filter]
+    )
+    display_df = table_src.copy()
+    display_df["Остаток_л"] = display_df["Остаток_л"].map(lambda x: f"{x:,.3f}".replace(",", " "))
+    display_df["Остаток_м3"] = display_df["Остаток_м3"].map(lambda x: f"{x:.3f}")
+    display_df["Расход_л"] = display_df["Расход_л"].map(lambda x: f"{x:,.3f}".replace(",", " "))
+    display_df["% Заполнения"] = display_df["% Заполнения"].map(lambda x: f"{x:.1f}%")
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+else:
+    st.dataframe(pd.DataFrame(columns=df_calc.columns), use_container_width=True, hide_index=True)
+
+excel_path = "helium_report.xlsx"
+with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+    df_calc.to_excel(writer, index=False, sheet_name="Учёт гелия")
+
+with open(excel_path, "rb") as f:
+    st.download_button(
+        label="Скачать таблицу в Excel (.xlsx)",
+        data=f,
+        file_name="helium_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
