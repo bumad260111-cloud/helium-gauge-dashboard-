@@ -1,3 +1,4 @@
+import math
 import os
 import pandas as pd
 import plotly.graph_objects as go
@@ -68,7 +69,6 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
     out["Остаток_л"] = out.apply(lambda r: calc_volume_liters(r["V_л"], r["P_тек"]), axis=1)
     out["Остаток_м3"] = out["Остаток_л"] / 1000.0
 
-    # Расход считаем в разрезе пары (Прибор, № Баллона)
     consumptions = []
     last_by_key = {}
 
@@ -98,31 +98,148 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def make_mini_gauge(p_cur: float, title_text: str, height: int = 210) -> go.Figure:
-    fig = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=p_cur,
-            number={"suffix": " МПа", "valueformat": ".1f", "font": {"size": 20}},
-            title={"text": title_text, "font": {"size": 14}},
-            gauge={
-                "axis": {"range": [0, P_MAX], "tickwidth": 1, "dtick": 5, "tickfont": {"size": 10}},
-                "bar": {"color": "#1F497D", "thickness": 0.25},
-                "bgcolor": "white",
-                "steps": [
-                    {"range": [0, 3], "color": "#F8D7DA"},
-                    {"range": [3, 10], "color": "#FFF3CD"},
-                    {"range": [10, 25], "color": "#D4EDDA"},
-                ],
-                "threshold": {
-                    "line": {"color": "red", "width": 3},
-                    "thickness": 0.8,
-                    "value": p_cur,
-                },
-            },
+def p_to_angle_deg(p_val: float) -> float:
+    """
+    Переводит давление 0..25 МПа в угол шкалы в стиле ТМ2:
+    0 МПа -> нижний левый угол (225°),
+    12.5 МПа -> верх (90°),
+    25 МПа -> нижний правый угол (-45°).
+    """
+    clamped = max(0.0, min(P_MAX, float(p_val)))
+    return 225.0 - (clamped / P_MAX) * 270.0
+
+
+def make_tm2_gauge(p_cur: float, title_text: str, height: int = 250) -> go.Figure:
+    fig = go.Figure()
+
+    r_outer = 1.0
+    r_tick_major = 0.85
+    r_tick_minor = 0.91
+    r_label = 0.68
+    r_needle = 0.78
+    r_tail = 0.16
+
+    # Внешний обод циферблата
+    ring_angles = [math.radians(a) for a in range(0, 361, 3)]
+    fig.add_trace(
+        go.Scatter(
+            x=[r_outer * math.cos(a) for a in ring_angles],
+            y=[r_outer * math.sin(a) for a in ring_angles],
+            mode="lines",
+            line=dict(color="#5B9BD5", width=3),
+            hoverinfo="skip",
+            showlegend=False,
         )
     )
-    fig.update_layout(height=height, margin=dict(l=15, r=15, t=42, b=10))
+
+    # Дуга шкалы 0..25 МПа
+    arc_deg = [225.0 - (i / 100.0) * 270.0 for i in range(101)]
+    fig.add_trace(
+        go.Scatter(
+            x=[0.96 * math.cos(math.radians(a)) for a in arc_deg],
+            y=[0.96 * math.sin(math.radians(a)) for a in arc_deg],
+            mode="lines",
+            line=dict(color="#1F4E78", width=2),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    # Деления через каждые 1 МПа (крупные каждые 5 МПа)
+    for p_tick in range(0, int(P_MAX) + 1):
+        ang = math.radians(p_to_angle_deg(p_tick))
+        is_major = (p_tick % 5 == 0)
+        r_start = r_tick_major if is_major else r_tick_minor
+        tick_color = "#C00000" if p_tick == 16 else ("#1F4E78" if is_major else "#4A7EBB")
+        tick_width = 3.0 if is_major else 1.3
+
+        fig.add_trace(
+            go.Scatter(
+                x=[r_start * math.cos(ang), 0.96 * math.cos(ang)],
+                y=[r_start * math.sin(ang), 0.96 * math.sin(ang)],
+                mode="lines",
+                line=dict(color=tick_color, width=tick_width),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+        if is_major:
+            fig.add_trace(
+                go.Scatter(
+                    x=[r_label * math.cos(ang)],
+                    y=[r_label * math.sin(ang)],
+                    mode="text",
+                    text=[str(p_tick)],
+                    textfont=dict(size=12, color="#1F4E78", family="Arial"),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+    # Подписи на циферблате в стиле ТМ2
+    fig.add_annotation(
+        x=0.0, y=-0.38, text="<b>MPa</b>", showarrow=False,
+        font=dict(size=13, color="#1F4E78")
+    )
+    fig.add_annotation(
+        x=-0.52, y=-0.62, text="ТМ2", showarrow=False,
+        font=dict(size=9, color="#444444")
+    )
+    fig.add_annotation(
+        x=0.52, y=-0.62, text="кл. 2,5", showarrow=False,
+        font=dict(size=9, color="#444444")
+    )
+
+    # Стрелка от центра
+    needle_ang = math.radians(p_to_angle_deg(p_cur))
+    x_tip = r_needle * math.cos(needle_ang)
+    y_tip = r_needle * math.sin(needle_ang)
+    x_back = -r_tail * math.cos(needle_ang)
+    y_back = -r_tail * math.sin(needle_ang)
+
+    fig.add_trace(
+        go.Scatter(
+            x=[x_back, x_tip],
+            y=[y_back, y_tip],
+            mode="lines",
+            line=dict(color="#111111", width=4),
+            hovertemplate=f"Давление: {p_cur:.1f} МПа<extra></extra>",
+            showlegend=False,
+        )
+    )
+
+    # Ось стрелки по центру
+    fig.add_trace(
+        go.Scatter(
+            x=[0.0],
+            y=[0.0],
+            mode="markers",
+            marker=dict(size=11, color="#222222", line=dict(color="#D0D0D0", width=2)),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    fig.update_layout(
+        title=dict(text=title_text, x=0.5, font=dict(size=14)),
+        height=height,
+        margin=dict(l=10, r=10, t=38, b=10),
+        plot_bgcolor="white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(
+            range=[-1.15, 1.15],
+            visible=False,
+            fixedrange=True,
+        ),
+        yaxis=dict(
+            range=[-1.12, 1.12],
+            visible=False,
+            fixedrange=True,
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+    )
     return fig
 
 
@@ -131,7 +248,6 @@ st.title("Мониторинг гелиевых баллонов — 6 приб�
 df_raw = init_data()
 df_calc = compute_metrics(df_raw)
 
-# Формируем список из 6 приборов (берём из DEFAULT_DEVICES + любые добавленные вручную)
 extra_devices = [
     d for d in df_calc["Прибор"].dropna().unique().tolist()
     if str(d).strip() and d not in DEFAULT_DEVICES
@@ -140,7 +256,6 @@ grid_devices = (DEFAULT_DEVICES + extra_devices)[:6]
 while len(grid_devices) < 6:
     grid_devices.append(f"Прибор {len(grid_devices) + 1}")
 
-# Последняя запись по каждому прибору
 latest_map = {}
 if not df_calc.empty:
     latest_rows = (
@@ -163,24 +278,23 @@ for row_idx in range(2):
                 p_val = float(r["P_тек"])
                 cyl_label = r["№ Баллона"] if str(r["№ Баллона"]).strip() else "—"
                 st.plotly_chart(
-                    make_mini_gauge(p_val, f"{dev_name} (Баллон №{cyl_label})"),
+                    make_tm2_gauge(p_val, f"{dev_name} (Баллон №{cyl_label})"),
                     use_container_width=True,
                 )
                 rem_str = f"{r['Остаток_л']:,.0f}".replace(",", " ")
                 st.caption(
-                    f"Дата: {r['Дата']} | Остаток: {rem_str} л ({r['% Заполнения']:.1f}%) | "
-                    f"Статус: {r['Статус']}"
+                    f"P = {p_val:.1f} МПа | Дата: {r['Дата']} | Остаток: {rem_str} л "
+                    f"({r['% Заполнения']:.1f}%) | Статус: {r['Статус']}"
                 )
             else:
                 st.plotly_chart(
-                    make_mini_gauge(0.0, f"{dev_name} (нет данных)"),
+                    make_tm2_gauge(0.0, f"{dev_name} (нет данных)"),
                     use_container_width=True,
                 )
-                st.caption("Замеров пока нет — добавьте запись в форме ниже.")
+                st.caption("P = 0.0 МПа | Замеров пока нет — добавьте запись ниже.")
 
 st.divider()
 
-# Сводная таблица по последнему состоянию приборов
 st.subheader("Сводка по приборам")
 if not df_calc.empty:
     summary_view = (
@@ -199,41 +313,43 @@ else:
 
 st.divider()
 
-# Форма добавления нового замера
 st.subheader("Добавить новый замер")
+
+if not df_raw.empty:
+    next_num = int(pd.to_numeric(df_raw["№"], errors="coerce").max() or 0) + 1
+    parsed_last_date = pd.to_datetime(df_raw["Дата"].iloc[-1], errors="coerce")
+    default_date = (
+        parsed_last_date + pd.DateOffset(months=1)
+        if pd.notna(parsed_last_date)
+        else pd.Timestamp.today()
+    )
+    default_dev = str(df_raw["Прибор"].iloc[-1] or DEFAULT_DEVICES[0])
+    default_op = str(df_raw["Пост / Оператор"].iloc[-1] or "")
+    default_cyl = str(df_raw["№ Баллона"].iloc[-1] or "")
+    default_v = float(pd.to_numeric(df_raw["V_л"].iloc[-1], errors="coerce") or 40.0)
+    default_p0 = float(pd.to_numeric(df_raw["P_нач"].iloc[-1], errors="coerce") or 15.0)
+else:
+    next_num = 1
+    default_date = pd.Timestamp.today()
+    default_dev = DEFAULT_DEVICES[0]
+    default_op = ""
+    default_cyl = ""
+    default_v = 40.0
+    default_p0 = 15.0
+
+dev_options = grid_devices if default_dev in grid_devices else [default_dev] + grid_devices
+
 with st.form("add_reading_form", clear_on_submit=True):
-    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    row1_c1, row1_c2, row1_c3, row1_c4 = st.columns(4)
+    f_date = row1_c1.date_input("Дата", value=default_date)
+    f_dev = row1_c2.selectbox("Прибор", options=dev_options, index=dev_options.index(default_dev))
+    f_op = row1_c3.text_input("Пост / Оператор", value=default_op)
+    f_cyl = row1_c4.text_input("№ Баллона", value=default_cyl)
 
-    if not df_raw.empty:
-        next_num = int(pd.to_numeric(df_raw["№"], errors="coerce").max() or 0) + 1
-        parsed_last_date = pd.to_datetime(df_raw["Дата"].iloc[-1], errors="coerce")
-        last_date = (
-            parsed_last_date + pd.DateOffset(months=1)
-            if pd.notna(parsed_last_date)
-            else pd.Timestamp.today()
-        )
-        last_dev = str(df_raw["Прибор"].iloc[-1] or DEFAULT_DEVICES[0])
-        last_op = str(df_raw["Пост / Оператор"].iloc[-1] or "")
-        last_cyl = str(df_raw["№ Баллона"].iloc[-1] or "")
-        last_v = float(pd.to_numeric(df_raw["V_л"].iloc[-1], errors="coerce") or 40.0)
-        last_p0 = float(pd.to_numeric(df_raw["P_нач"].iloc[-1], errors="coerce") or 15.0)
-    else:
-        next_num = 1
-        last_date = pd.Timestamp.today()
-        last_dev = DEFAULT_DEVICES[0]
-        last_op = ""
-        last_cyl = ""
-        last_v = 40.0
-        last_p0 = 15.0
-
-    dev_options = grid_devices if last_dev in grid_devices else [last_dev] + grid_devices
-    f_date = c1.date_input("Дата", value=last_date)
-    f_dev = c2.selectbox("Прибор", options=dev_options, index=dev_options.index(last_dev))
-    f_op = c3.text_input("Пост / Оператор", value=last_op)
-    f_cyl = c4.text_input("№ Баллона", value=last_cyl)
-    f_v = c5.number_input("V баллона, л", min_value=1.0, max_value=200.0, value=last_v, step=5.0)
-    f_p0 = c6.number_input("P нач., МПа", min_value=0.1, max_value=30.0, value=last_p0, step=0.5)
-    f_p1 = c7.number_input("P тек., МПа", min_value=0.0, max_value=30.0, value=10.0, step=0.5)
+    row2_c1, row2_c2, row2_c3 = st.columns(3)
+    f_v = row2_c1.number_input("V баллона, л", min_value=1.0, max_value=200.0, value=default_v, step=5.0)
+    f_p0 = row2_c2.number_input("P нач., МПа", min_value=0.1, max_value=30.0, value=default_p0, step=0.5)
+    f_p1 = row2_c3.number_input("P тек., МПа", min_value=0.0, max_value=30.0, value=10.0, step=0.5)
 
     submitted = st.form_submit_button("Добавить запись в журнал")
     if submitted:
@@ -243,9 +359,9 @@ with st.form("add_reading_form", clear_on_submit=True):
             "Прибор": f_dev,
             "Пост / Оператор": f_op,
             "№ Баллона": f_cyl,
-            "V_л": f_v,
-            "P_нач": f_p0,
-            "P_тек": f_p1,
+            "V_л": float(f_v),
+            "P_нач": float(f_p0),
+            "P_тек": float(f_p1),
         }])
         updated = pd.concat([df_raw, new_entry], ignore_index=True)
         updated.to_csv(DATA_FILE, index=False)
@@ -253,7 +369,6 @@ with st.form("add_reading_form", clear_on_submit=True):
 
 st.divider()
 
-# Журнал замеров и управление им
 st.subheader("Журнал замеров")
 
 filter_options = ["Все приборы"] + grid_devices
