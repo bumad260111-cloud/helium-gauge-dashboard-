@@ -9,12 +9,12 @@ st.set_page_config(page_title="Учёт гелиевых баллонов (6 п�
 DATA_FILE = "helium_log.csv"
 COLUMNS = ["№", "Дата", "Прибор", "Пост / Оператор", "№ Баллона", "V_л", "P_нач", "P_тек"]
 DEFAULT_DEVICES = [
-    "Прибор 1",
-    "Прибор 2",
-    "Прибор 3",
-    "Прибор 4",
-    "Прибор 5",
-    "Прибор 6",
+    "Agilent 6890N (зав. № US10544029)",
+    "Trace 1610 (зав. № 724020709)",
+    "GC-2010PlusAF (зав. № C11805570951US)",
+    "Trace 1310 / ISQ 7000 (зав. № 721000640)",
+    "Trace 1610 + AI/AS 1610 (зав. № 725020727)",
+    "СЕР-01 / ElvaX Pro (зав. № E112)",
 ]
 P_MAX = 25.0
 
@@ -120,7 +120,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
     r_needle = 0.79
     r_tail = 0.17
 
-    # Внешний жирный обод циферблата
     ring_angles = [math.radians(a) for a in range(0, 361, 3)]
     fig.add_trace(
         go.Scatter(
@@ -135,7 +134,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
         )
     )
 
-    # Внутреннее кольцо шкалы
     arc_deg = [225.0 - (i / 100.0) * 270.0 for i in range(101)]
     fig.add_trace(
         go.Scatter(
@@ -148,7 +146,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
         )
     )
 
-    # Деления через каждые 1 МПа (крупные каждые 5 МПа)
     for p_tick in range(0, int(P_MAX) + 1):
         ang = math.radians(p_to_angle_deg(p_tick))
         is_major = (p_tick % 5 == 0)
@@ -180,7 +177,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
                 )
             )
 
-    # Подписи на циферблате
     fig.add_annotation(
         x=0.0, y=-0.36, text="<b>MPa</b>", showarrow=False,
         font=dict(size=16, color="#16365C")
@@ -194,7 +190,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
         font=dict(size=11, color="#333333")
     )
 
-    # Жирная стрелка от центра
     needle_ang = math.radians(p_to_angle_deg(p_cur))
     x_tip = r_needle * math.cos(needle_ang)
     y_tip = r_needle * math.sin(needle_ang)
@@ -212,7 +207,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
         )
     )
 
-    # Наконечник стрелки
     fig.add_trace(
         go.Scatter(
             x=[x_tip],
@@ -229,7 +223,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
         )
     )
 
-    # Крупный центральный узел стрелки
     fig.add_trace(
         go.Scatter(
             x=[0.0],
@@ -242,7 +235,7 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 310) -> go.Figur
     )
 
     fig.update_layout(
-        title=dict(text=f"<b>{title_text}</b>", x=0.5, font=dict(size=15)),
+        title=dict(text=f"<b>{title_text}</b>", x=0.5, font=dict(size=13)),
         height=height,
         margin=dict(l=2, r=2, t=34, b=2),
         plot_bgcolor="rgba(0,0,0,0)",
@@ -298,7 +291,7 @@ for row_idx in range(2):
                 p_val = float(r["P_тек"])
                 cyl_label = r["№ Баллона"] if str(r["№ Баллона"]).strip() else "—"
                 st.plotly_chart(
-                    make_tm2_gauge(p_val, f"{dev_name} (Баллон №{cyl_label})", height=310),
+                    make_tm2_gauge(p_val, f"{dev_name} | Баллон №{cyl_label}", height=310),
                     use_container_width=True,
                 )
                 rem_str = f"{r['Остаток_л']:,.0f}".replace(",", " ")
