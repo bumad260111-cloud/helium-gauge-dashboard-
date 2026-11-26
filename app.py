@@ -1,7 +1,10 @@
+import base64
+import io
 import math
 import os
 import pandas as pd
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 st.set_page_config(page_title="Учёт гелиевых баллонов (6 приборов)", layout="wide")
@@ -52,6 +55,135 @@ DEFAULT_DEVICES = [
 P_MAX = 25.0
 
 
+def _get_github_cfg():
+    try:
+        gh = st.secrets.get("github", None)
+        if gh and gh.get("token") and gh.get("repo"):
+            return {
+                "token": str(gh["token"]).strip(),
+                "repo": str(gh["repo"]).strip(),
+                "branch": str(gh.get("branch", "main")).strip(),
+                "path": str(gh.get("path", DATA_FILE)).strip(),
+            }
+    except Exception:
+        pass
+    return None
+
+
+def _gh_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+def _gh_contents_url(cfg: dict) -> str:
+    return f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['path']}"
+
+
+def _gh_get_file(cfg: dict):
+    """Возвращает (csv_text, sha) либо (None, None), если файла ещё нет."""
+    resp = requests.get(
+        _gh_contents_url(cfg),
+        headers=_gh_headers(cfg["token"]),
+        params={"ref": cfg["branch"]},
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        data = resp.json()
+        raw_b64 = data.get("content", "")
+        text = base64.b64decode(raw_b64).decode("utf-8")
+        return text, data.get("sha")
+    if resp.status_code == 404:
+        return None, None
+    resp.raise_for_status()
+    return None, None
+
+
+def _gh_put_file(cfg: dict, csv_text: str, message: str, sha: str | None = None):
+    """Создаёт или обновляет файл в репозитории GitHub."""
+    payload = {
+        "message": message,
+        "content": base64.b64encode(csv_text.encode("utf-8")).decode("ascii"),
+        "branch": cfg["branch"],
+    }
+    if sha:
+        payload["sha"] = sha
+
+    resp = requests.put(
+        _gh_contents_url(cfg),
+        headers=_gh_headers(cfg["token"]),
+        json=payload,
+        timeout=15,
+    )
+    resp.raise_for_status()
+
+
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    for col in COLUMNS:
+        if col not in df.columns:
+            df[col] = DEFAULT_DEVICES[0] if col == "Прибор" else None
+    df = df[COLUMNS].copy()
+    if not df.empty:
+        df["Дата"] = pd.to_datetime(df["Дата"], errors="coerce").dt.strftime("%Y-%m-%d")
+    return df
+
+
+def init_data() -> pd.DataFrame:
+    cfg = _get_github_cfg()
+    if cfg:
+        try:
+            csv_text, sha = _gh_get_file(cfg)
+            st.session_state["gh_sha"] = sha
+            if csv_text is not None:
+                df = pd.read_csv(
+                    io.StringIO(csv_text),
+                    dtype={"Прибор": str, "№ Баллона": str, "Пост / Оператор": str},
+                )
+                return _normalize_df(df)
+
+            empty_df = pd.DataFrame(columns=COLUMNS)
+            empty_csv = empty_df.to_csv(index=False)
+            _gh_put_file(cfg, empty_csv, "Инициализация журнала helium_log.csv", sha=None)
+            _, new_sha = _gh_get_file(cfg)
+            st.session_state["gh_sha"] = new_sha
+            return empty_df
+        except Exception as exc:
+            st.error(f"Ошибка чтения из GitHub: {exc}")
+
+    if os.path.exists(DATA_FILE):
+        df = pd.read_csv(
+            DATA_FILE,
+            dtype={"Прибор": str, "№ Баллона": str, "Пост / Оператор": str},
+        )
+        return _normalize_df(df)
+
+    df = pd.DataFrame(columns=COLUMNS)
+    df.to_csv(DATA_FILE, index=False)
+    return df
+
+
+def save_data(df: pd.DataFrame, commit_msg: str):
+    norm = _normalize_df(df)
+    csv_text = norm.to_csv(index=False)
+
+    # Всегда обновляем локальную копию в контейнере для текущей сессии
+    norm.to_csv(DATA_FILE, index=False)
+
+    cfg = _get_github_cfg()
+    if cfg:
+        try:
+            _, current_sha = _gh_get_file(cfg)
+            sha_to_use = current_sha or st.session_state.get("gh_sha")
+            _gh_put_file(cfg, csv_text, commit_msg, sha=sha_to_use)
+            _, updated_sha = _gh_get_file(cfg)
+            st.session_state["gh_sha"] = updated_sha
+            st.toast("Сохранено в GitHub", icon="✅")
+        except Exception as exc:
+            st.error(f"Не удалось сохранить в GitHub: {exc}")
+
+
 def calc_volume_liters(v_water_l: float, p_mpa: float) -> float:
     """Расчёт объёма газа (л) при н.у. с учётом поправки сжимаемости гелия."""
     if p_mpa <= 0 or v_water_l <= 0:
@@ -65,25 +197,6 @@ def get_status(p_cur: float) -> str:
     elif p_cur <= 3.0:
         return "КРИТИЧНЫЙ"
     return "В НОРМЕ"
-
-
-def init_data() -> pd.DataFrame:
-    if os.path.exists(DATA_FILE):
-        df = pd.read_csv(
-            DATA_FILE,
-            dtype={"Прибор": str, "№ Баллона": str, "Пост / Оператор": str},
-        )
-        for col in COLUMNS:
-            if col not in df.columns:
-                df[col] = DEFAULT_DEVICES[0] if col == "Прибор" else None
-        df = df[COLUMNS]
-        if not df.empty:
-            df["Дата"] = pd.to_datetime(df["Дата"], errors="coerce").dt.strftime("%Y-%m-%d")
-        return df
-
-    df = pd.DataFrame(columns=COLUMNS)
-    df.to_csv(DATA_FILE, index=False)
-    return df
 
 
 def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
@@ -132,12 +245,6 @@ def compute_metrics(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def p_to_angle_deg(p_val: float) -> float:
-    """
-    Переводит давление 0..25 МПа в угол шкалы в стиле ТМ2:
-    0 МПа -> нижний левый угол (225°),
-    12.5 МПа -> верх (90°),
-    25 МПа -> нижний правый угол (-45°).
-    """
     clamped = max(0.0, min(P_MAX, float(p_val)))
     return 225.0 - (clamped / P_MAX) * 270.0
 
@@ -152,7 +259,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 460) -> go.Figur
     r_needle = 0.76
     r_tail = 0.16
 
-    # Внешний жирный обод циферблата
     ring_angles = [math.radians(a) for a in range(0, 361, 3)]
     fig.add_trace(
         go.Scatter(
@@ -167,7 +273,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 460) -> go.Figur
         )
     )
 
-    # Внутреннее кольцо шкалы
     arc_deg = [225.0 - (i / 100.0) * 270.0 for i in range(101)]
     fig.add_trace(
         go.Scatter(
@@ -180,7 +285,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 460) -> go.Figur
         )
     )
 
-    # Деления через каждые 1 МПа (крупные каждые 5 МПа)
     for p_tick in range(0, int(P_MAX) + 1):
         ang = math.radians(p_to_angle_deg(p_tick))
         is_major = (p_tick % 5 == 0)
@@ -212,7 +316,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 460) -> go.Figur
                 )
             )
 
-    # Надписи на циферблате без наложения
     fig.add_annotation(
         x=0.0, y=-0.30, text="<b>MPa</b>", showarrow=False,
         font=dict(size=24, color="#16365C")
@@ -226,7 +329,6 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 460) -> go.Figur
         font=dict(size=16, color="#333333")
     )
 
-    # Стрелка от центра
     needle_ang = math.radians(p_to_angle_deg(p_cur))
     x_tip = r_needle * math.cos(needle_ang)
     y_tip = r_needle * math.sin(needle_ang)
@@ -294,6 +396,11 @@ def make_tm2_gauge(p_cur: float, title_text: str, height: int = 460) -> go.Figur
 
 
 st.title("Мониторинг гелиевых баллонов — 6 приборов")
+
+if _get_github_cfg():
+    st.caption("Хранилище: GitHub (`helium_log.csv`) — записи сохраняются между днями и перезапусками.")
+else:
+    st.caption("Хранилище: локальный `helium_log.csv` (добавьте `[github]` в Secrets для записи в репозиторий).")
 
 df_raw = init_data()
 df_calc = compute_metrics(df_raw)
@@ -414,7 +521,7 @@ with st.form("add_reading_form", clear_on_submit=True):
             "P_тек": float(f_p1),
         }])
         updated = pd.concat([df_raw, new_entry], ignore_index=True)
-        updated.to_csv(DATA_FILE, index=False)
+        save_data(updated, f"Замер №{next_num}: {f_dev} ({f_p1:.1f} МПа)")
         st.rerun()
 
 st.divider()
@@ -428,7 +535,7 @@ with st.expander("Управление журналом"):
     confirm_clear = st.checkbox("Подтверждаю очистку всех записей из журнала")
     if st.button("Очистить журнал", disabled=not confirm_clear):
         empty_df = pd.DataFrame(columns=COLUMNS)
-        empty_df.to_csv(DATA_FILE, index=False)
+        save_data(empty_df, "Очистка журнала helium_log.csv")
         st.rerun()
 
 if not df_calc.empty:
